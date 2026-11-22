@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>دستیار ایمیل</title>
+<style>
+:root { --bg:#0f1117; --panel:#171a23; --user:#1f6feb; --agent:#2a2f3a; --text:#e6e6e6; --muted:#9aa4b2; }
+* { box-sizing: border-box; }
+body { margin:0; font-family: "Segoe UI", Vazirmatn, Tahoma, sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
+header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid #262b36; flex-wrap:wrap; }
+header h1 { font-size:16px; margin:0; font-weight:600; }
+header .info { color:var(--muted); font-size:12px; direction:ltr; }
+header .spacer { flex:1; }
+button { background:#2d333b; color:var(--text); border:1px solid #3a414d; border-radius:8px; padding:8px 12px; cursor:pointer; font-family:inherit; }
+button:hover { background:#373e47; }
+main { flex:1; display:flex; min-height:0; }
+#chat { flex:1; display:flex; flex-direction:column; min-width:0; }
+#messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+.msg { max-width: min(760px, 80%); padding:10px 14px; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; line-height:1.6; }
+.msg.user { background:var(--user); align-self:flex-start; border-bottom-right-radius:4px; }
+.msg.agent { background:var(--agent); align-self:flex-end; border-bottom-left-radius:4px; }
+.msg.error { background:#5a1f1f; }
+#composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid #262b36; background:var(--panel); }
+#input { flex:1; resize:none; min-height:48px; max-height:160px; background:#0b0d12; color:var(--text); border:1px solid #2a2f3a; border-radius:10px; padding:10px 12px; font-family:inherit; font-size:15px; }
+#composer button { background:var(--user); border-color:var(--user); min-width:90px; }
+aside { width:380px; border-inline-start:1px solid #262b36; background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+.tabs { display:flex; border-bottom:1px solid #262b36; }
+.tabs button { flex:1; border:0; border-radius:0; background:transparent; padding:12px; }
+.tabs button.active { background:#0b0d12; color:#fff; }
+.panel { flex:1; overflow:auto; padding:12px; display:none; }
+.panel.active { display:block; }
+#prompt { direction:ltr; text-align:left; font-family: Consolas, "Courier New", monospace; font-size:12px; white-space:pre-wrap; word-break:break-word; color:#cdd6e4; }
+.draft { background:#0b0d12; border:1px solid #2a2f3a; border-radius:10px; padding:10px; margin-bottom:10px; }
+.draft .meta { color:var(--muted); font-size:12px; margin-bottom:6px; }
+.draft .body { white-space:pre-wrap; font-size:13px; margin-bottom:8px; }
+.draft button { background:#238636; border-color:#238636; }
+@media (max-width: 900px) {
+  main { flex-direction:column; }
+  aside { width:auto; height:40vh; border-inline-start:0; border-top:1px solid #262b36; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>دستیار ایمیل</h1>
+  <span class="info" id="info"></span>
+  <span class="spacer"></span>
+  <button id="reset">گفتگوی جدید</button>
+</header>
+<main>
+  <section id="chat">
+    <div id="messages"></div>
+    <form id="composer">
+      <textarea id="input" dir="auto" placeholder="پیام خود را بنویسید..."></textarea>
+      <button type="submit">ارسال</button>
+    </form>
+  </section>
+  <aside>
+    <div class="tabs">
+      <button class="active" data-tab="prompt">Prompt LLM</button>
+      <button data-tab="drafts">Drafts</button>
+    </div>
+    <div class="panel active" id="panel-prompt"><div id="prompt">—</div></div>
+    <div class="panel" id="panel-drafts"><div id="drafts">—</div></div>
+  </aside>
+</main>
+<script>
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const promptEl = document.getElementById('prompt');
+const draftsEl = document.getElementById('drafts');
+
+function addMsg(role, text, isError) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role + (isError ? ' error' : '');
+  div.setAttribute('dir', 'auto');
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  addMsg('user', text);
+  inputEl.value = '';
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text})
+    });
+    const data = await res.json();
+    addMsg('agent', data.response || '(no response)');
+    renderPrompt(data.prompt);
+  } catch (e) {
+    addMsg('agent', '[error] ' + e, true);
+  }
+  refreshDrafts();
+}
+
+function renderPrompt(prompt) {
+  if (!prompt) { promptEl.textContent = '—'; return; }
+  promptEl.textContent = JSON.stringify(prompt, null, 2);
+}
+
+async function refreshPrompt() {
+  try {
+    const res = await fetch('/api/prompt');
+    const data = await res.json();
+    renderPrompt(data.latest);
+  } catch (e) {}
+}
+
+async function refreshDrafts() {
+  try {
+    const res = await fetch('/api/drafts');
+    const data = await res.json();
+    draftsEl.innerHTML = '';
+    const drafts = data.drafts || [];
+    if (!drafts.length) { draftsEl.textContent = '—'; return; }
+    for (const d of drafts) {
+      const card = document.createElement('div');
+      card.className = 'draft';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = 'To: ' + (d.to || []).join(', ') + ' — ' + d.subject;
+      meta.setAttribute('dir', 'auto');
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = d.body || '';
+      body.setAttribute('dir', 'auto');
+      const btn = document.createElement('button');
+      btn.textContent = 'ارسال / Send';
+      btn.onclick = async () => {
+        btn.disabled = true;
+        await fetch('/api/drafts/' + d.draft_id + '/send', {method: 'POST'});
+        refreshDrafts();
+      };
+      card.append(meta, body, btn);
+      draftsEl.appendChild(card);
+    }
+  } catch (e) {}
+}
+
+async function reset() {
+  await fetch('/api/reset', {method: 'POST'});
+  messagesEl.innerHTML = '';
+  addMsg('agent', 'گفتگوی جدید شروع شد.');
+}
+
+document.getElementById('composer').addEventListener('submit', (e) => { e.preventDefault(); send(); });
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+document.getElementById('reset').onclick = reset;
+
+document.querySelectorAll('.tabs button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+  };
+});
+
+(async () => {
+  try {
+    const res = await fetch('/api/info');
+    const info = await res.json();
+    document.getElementById('info').textContent =
+      info.model + ' · ' + info.backend + ' · ' + info.mailbox;
+  } catch (e) {}
+  refreshPrompt();
+  refreshDrafts();
+  setInterval(refreshPrompt, 5000);
+  setInterval(refreshDrafts, 5000);
+})();
+</script>
+</body>
+</html>
