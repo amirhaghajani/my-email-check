@@ -124,7 +124,10 @@ Options: `--host 127.0.0.1 --port 8765`.
 
 The page has:
 - A chat box (Persian/English, RTL).
-- A **Prompt LLM** tab showing the exact messages + response sent to the LLM.
+- A live **«در حال پردازش... Ns»** waiting indicator (with elapsed seconds) while the agent runs,
+  and the total time shown under each answer.
+- A **Prompt LLM** tab showing the exact messages + response sent to the LLM (including tool calls
+  and per-call `duration_ms`).
 - A **Drafts** tab: in the web UI, `send_email` does **not** send; it creates a draft and you
   click **Send**. This is the confirmation step.
 - Prompts are also appended to `reports/llm_prompts.jsonl`.

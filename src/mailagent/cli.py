@@ -29,6 +29,11 @@ BANNER = "Exchange Mail Agent - type a request, or 'exit' to quit."
 
 
 def _as_text(result: object) -> str:
+    response = getattr(result, "response", None)
+    if response is not None:
+        content = getattr(response, "content", None)
+        if content is not None:
+            return content
     content = getattr(result, "content", None)
     if isinstance(content, str):
         return content

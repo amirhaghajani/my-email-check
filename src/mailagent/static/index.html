@@ -14,6 +14,7 @@ header .info { color:var(--muted); font-size:12px; direction:ltr; }
 header .spacer { flex:1; }
 button { background:#2d333b; color:var(--text); border:1px solid #3a414d; border-radius:8px; padding:8px 12px; cursor:pointer; font-family:inherit; }
 button:hover { background:#373e47; }
+button:disabled { opacity:0.55; cursor:not-allowed; }
 main { flex:1; display:flex; min-height:0; }
 #chat { flex:1; display:flex; flex-direction:column; min-width:0; }
 #messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
@@ -21,6 +22,13 @@ main { flex:1; display:flex; min-height:0; }
 .msg.user { background:var(--user); align-self:flex-start; border-bottom-right-radius:4px; }
 .msg.agent { background:var(--agent); align-self:flex-end; border-bottom-left-radius:4px; }
 .msg.error { background:#5a1f1f; }
+.msg .meta { margin-top:6px; font-size:11px; color:var(--muted); direction:ltr; text-align:right; }
+.waiting { opacity:0.9; color:var(--muted); font-style:italic; }
+.dots { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
+.dots i { width:6px; height:6px; border-radius:50%; background:var(--muted); animation: blink 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: 0.2s; }
+.dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 #composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid #262b36; background:var(--panel); }
 #input { flex:1; resize:none; min-height:48px; max-height:160px; background:#0b0d12; color:var(--text); border:1px solid #2a2f3a; border-radius:10px; padding:10px 12px; font-family:inherit; font-size:15px; }
 #composer button { background:var(--user); border-color:var(--user); min-width:90px; }
@@ -53,7 +61,7 @@ aside { width:380px; border-inline-start:1px solid #262b36; background:var(--pan
     <div id="messages"></div>
     <form id="composer">
       <textarea id="input" dir="auto" placeholder="پیام خود را بنویسید..."></textarea>
-      <button type="submit">ارسال</button>
+      <button type="submit" id="send-btn">ارسال</button>
     </form>
   </section>
   <aside>
@@ -68,8 +76,12 @@ aside { width:380px; border-inline-start:1px solid #262b36; background:var(--pan
 <script>
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('send-btn');
 const promptEl = document.getElementById('prompt');
 const draftsEl = document.getElementById('drafts');
+
+let pendingEl = null;
+let waitTimer = null;
 
 function addMsg(role, text, isError) {
   const div = document.createElement('div');
@@ -80,11 +92,56 @@ function addMsg(role, text, isError) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+function addMsgWithMeta(role, text, elapsedMs, isError) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role + (isError ? ' error' : '');
+  div.setAttribute('dir', 'auto');
+  const body = document.createElement('div');
+  body.textContent = text;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = '⏱ ' + (elapsedMs / 1000).toFixed(1) + 's';
+  div.append(body, meta);
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function setWaiting(on) {
+  if (on) {
+    if (pendingEl) return;
+    pendingEl = document.createElement('div');
+    pendingEl.className = 'msg agent waiting';
+    pendingEl.setAttribute('dir', 'auto');
+    pendingEl.innerHTML =
+      '<span class="dots"><i></i><i></i><i></i></span> در حال پردازش... 0.0s';
+    messagesEl.appendChild(pendingEl);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const started = performance.now();
+    waitTimer = setInterval(() => {
+      if (pendingEl) {
+        const secs = ((performance.now() - started) / 1000).toFixed(1);
+        pendingEl.innerHTML =
+          '<span class="dots"><i></i><i></i><i></i></span> در حال پردازش... ' + secs + 's';
+      }
+    }, 100);
+    inputEl.disabled = true;
+    sendBtn.disabled = true;
+  } else {
+    clearInterval(waitTimer);
+    waitTimer = null;
+    if (pendingEl) { pendingEl.remove(); pendingEl = null; }
+    inputEl.disabled = false;
+    sendBtn.disabled = false;
+  }
+}
+
 async function send() {
   const text = inputEl.value.trim();
-  if (!text) return;
+  if (!text || pendingEl) return;
   addMsg('user', text);
   inputEl.value = '';
+  setWaiting(true);
+  const started = performance.now();
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -92,12 +149,17 @@ async function send() {
       body: JSON.stringify({message: text})
     });
     const data = await res.json();
-    addMsg('agent', data.response || '(no response)');
+    const elapsed = (data.elapsed_ms != null) ? data.elapsed_ms : (performance.now() - started);
+    setWaiting(false);
+    addMsgWithMeta('agent', data.response || '(no response)', elapsed, false);
     renderPrompt(data.prompt);
   } catch (e) {
-    addMsg('agent', '[error] ' + e, true);
+    const elapsed = performance.now() - started;
+    setWaiting(false);
+    addMsgWithMeta('agent', '[error] ' + e, elapsed, true);
+  } finally {
+    refreshDrafts();
   }
-  refreshDrafts();
 }
 
 function renderPrompt(prompt) {
@@ -147,6 +209,7 @@ async function refreshDrafts() {
 async function reset() {
   await fetch('/api/reset', {method: 'POST'});
   messagesEl.innerHTML = '';
+  pendingEl = null;
   addMsg('agent', 'گفتگوی جدید شروع شد.');
 }
 

@@ -24,6 +24,11 @@ class ChatRequest(BaseModel):
 
 
 def _as_text(result: object) -> str:
+    response = getattr(result, "response", None)
+    if response is not None:
+        content = getattr(response, "content", None)
+        if content is not None:
+            return content
     content = getattr(result, "content", None)
     if isinstance(content, str):
         return content
@@ -81,13 +86,17 @@ def create_app(
 
     @app.post("/api/chat")
     async def chat(req: ChatRequest) -> dict[str, Any]:
+        import time
+
+        started = time.perf_counter()
         async with run_lock:
             try:
                 result = await agent.run(req.message, ctx=ctx, memory=memory)
                 answer = _as_text(result)
             except Exception as exc:
                 answer = f"[error] {exc}"
-        return {"response": answer, "prompt": logger.latest}
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {"response": answer, "prompt": logger.latest, "elapsed_ms": elapsed_ms}
 
     @app.get("/api/prompt")
     def get_prompt() -> dict[str, Any]:
