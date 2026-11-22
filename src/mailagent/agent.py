@@ -13,6 +13,7 @@ SYSTEM_PROMPT = """You are an assistant that operates a company mailbox through 
 Available tools:
 - resolve_recipient(name): resolve a person or partial address to concrete email addresses. Do this first when the user names someone (e.g. "Mr Bala Bala").
 - search_emails(to, from_, subject_contains, body_contains, since, until, folder, limit, has_attachments, preview): search mail. folder is "sentitems" (default), "inbox", or "all". Dates are ISO strings like "2025-01-01". Set preview=true to include a short body snippet.
+- scan_emails_for_secrets(folder, since, until, max_items, batch_size, report_path): scan mail in batches with local detectors for passwords/secrets. Use this for "check all my emails" requests instead of reading emails one by one.
 - read_email(item_id, include_body, max_body_chars): read one email by its item_id.
 - create_email(to, subject, body, cc, bcc): create a draft (does NOT send). Returns draft_id.
 - send_email(draft_id): send a draft. It always asks the user to confirm on the console.
@@ -25,6 +26,7 @@ Rules:
 4. Before sending any email, create a draft and let the user confirm. Do not call send_email unless the user asked to send.
 5. When asked for a report, or when a written summary is useful, write a Markdown file with write_text_file and tell the user its path.
 6. Reply in the same language as the user (Persian or English).
+7. For bulk "find all passwords/secrets" requests, use scan_emails_for_secrets (batched, local detection) and then write a report. Do not try to read every email individually.
 """
 
 

@@ -149,10 +149,35 @@ The page has:
 |---|---|
 | `resolve_recipient(name)` | Resolve a person/partial address to concrete mailboxes |
 | `search_emails(...)` | Search Sent Items / Inbox / all; filter by to, from, subject, body, dates, attachments |
+| `scan_emails_for_secrets(...)` | Batch-scan mail with local detectors for passwords/secrets (use for "check all my emails") |
 | `read_email(item_id)` | Read one email's headers and body text |
 | `create_email(...)` | Create a draft (does **not** send) |
 | `send_email(draft_id)` | Send a draft — **always asks for confirmation** |
 | `write_text_file(path, content)` | Write a UTF-8 report under `OUTPUT_DIR` |
+
+## Bulk secret scan ("check all my emails")
+
+`search_emails` is capped at 200 per call and has no pagination, so it is **not** a bulk audit.
+For "find all passwords/secrets I sent" requests, the agent uses `scan_emails_for_secrets`:
+
+- Pages through the mailbox **server-side** in batches (default 50).
+- Runs local detectors: `password=`, `passwd:`, `user:pass`, URL credentials, connection
+  strings, private keys, and Persian «رمز عبور».
+- Masks values by default; writes a Markdown report under `OUTPUT_DIR`.
+- Scans up to `max_items` (default 1000).
+
+Example:
+```text
+you> Scan my whole Sent Items for passwords or secrets and write a report.
+```
+
+One-shot:
+```powershell
+uv run python -m mailagent "scan sent items for secrets, up to 5000 emails, report to scan.md"
+```
+
+Professionals combine this deterministic pass with an LLM triage of only the candidate snippets
+(batched, with a strict JSON schema), then aggregate/deduplicate into a final report.
 
 ## Optional: run the tools as an MCP server
 

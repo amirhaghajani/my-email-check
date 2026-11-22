@@ -92,17 +92,23 @@ class ExchangeClient:
             return self.account.msg_folder_root
         raise ValueError(f"Unknown folder: {folder!r}")
 
-    def search(
-        self,
-        folder: str = "sentitems",
-        since: datetime | None = None,
-        until: datetime | None = None,
-        subject_contains: str | None = None,
-        limit: int = 25,
-        fetch_body: bool = False,
-    ) -> list[Any]:
-        qs = self.get_folder(folder)
+    _LIST_FIELDS = [
+        "subject",
+        "sender",
+        "to_recipients",
+        "cc_recipients",
+        "datetime_sent",
+        "has_attachments",
+    ]
 
+    def _query(
+        self,
+        folder: str,
+        since: datetime | None,
+        until: datetime | None,
+        subject_contains: str | None,
+    ) -> Any:
+        qs = self.get_folder(folder)
         filters: list[Q] = []
         if since is not None:
             filters.append(Q(datetime_sent__gte=since))
@@ -115,15 +121,19 @@ class ExchangeClient:
             for extra in filters[1:]:
                 combined = combined & extra
             qs = qs.filter(combined)
+        return qs
 
-        fields = [
-            "subject",
-            "sender",
-            "to_recipients",
-            "cc_recipients",
-            "datetime_sent",
-            "has_attachments",
-        ]
+    def search(
+        self,
+        folder: str = "sentitems",
+        since: datetime | None = None,
+        until: datetime | None = None,
+        subject_contains: str | None = None,
+        limit: int = 25,
+        fetch_body: bool = False,
+    ) -> list[Any]:
+        qs = self._query(folder, since, until, subject_contains)
+        fields = list(self._LIST_FIELDS)
         if fetch_body:
             fields.append("text_body")
         qs = qs.only(*fields).order_by("-datetime_sent")[: max(1, limit)]
@@ -132,6 +142,42 @@ class ExchangeClient:
         for item in items:
             self._item_cache[item_id(item)] = item
         return items
+
+    def iter_items(
+        self,
+        folder: str = "sentitems",
+        since: datetime | None = None,
+        until: datetime | None = None,
+        subject_contains: str | None = None,
+        batch_size: int = 50,
+        max_items: int | None = None,
+        fetch_body: bool = True,
+    ):
+        """Yield items in batches (server-side paging), optionally capped."""
+        qs = self._query(folder, since, until, subject_contains)
+        fields = list(self._LIST_FIELDS)
+        if fetch_body:
+            fields.append("text_body")
+        qs = qs.only(*fields).order_by("-datetime_sent")
+
+        offset = 0
+        fetched = 0
+        while True:
+            if max_items is not None and fetched >= max_items:
+                break
+            size = batch_size if max_items is None else min(batch_size, max_items - fetched)
+            if size <= 0:
+                break
+            batch = list(qs[offset : offset + size])
+            if not batch:
+                break
+            for item in batch:
+                self._item_cache[item_id(item)] = item
+                yield item
+            fetched += len(batch)
+            offset += len(batch)
+            if len(batch) < size:
+                break
 
     def get_item(self, item_id_value: str) -> Any:
         cached = self._item_cache.get(item_id_value)

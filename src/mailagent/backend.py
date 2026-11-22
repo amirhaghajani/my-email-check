@@ -25,6 +25,17 @@ class MailboxBackend(Protocol):
         fetch_body: bool = False,
     ) -> list[Any]: ...
 
+    def iter_items(
+        self,
+        folder: str = "sentitems",
+        since: Any = None,
+        until: Any = None,
+        subject_contains: str | None = None,
+        batch_size: int = 50,
+        max_items: int | None = None,
+        fetch_body: bool = True,
+    ): ...
+
     def get_item(self, item_id: str) -> Any: ...
 
     def create_message(

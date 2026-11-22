@@ -16,6 +16,7 @@ from .backend import MailboxBackend, build_backend
 from .config import Settings, get_settings
 from .exchange_client import item_id
 from .output import console, redact, redact_value, safe_output_path
+from .secret_scan import scan_text
 
 ConfirmFn = Callable[[str], bool]
 
@@ -177,6 +178,88 @@ class ToolBox:
 
         return results
 
+    def scan_emails_for_secrets(
+        self,
+        folder: str = "sentitems",
+        since: str | None = None,
+        until: str | None = None,
+        max_items: int = 1000,
+        batch_size: int = 50,
+        report_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Scan emails in batches for likely passwords/secrets using local detectors.
+
+        Use this for "check all my emails" requests. It pages through the mailbox
+        server-side instead of loading everything into the LLM context.
+        """
+        client = self.backend
+        default_tz = getattr(getattr(client, "account", None), "default_timezone", None)
+        since_dt = _parse_dt(since, default_tz)
+        until_dt = _parse_dt(until, default_tz)
+        if until_dt is not None and isinstance(until, str) and "T" not in until and " " not in until:
+            until_dt = until_dt + timedelta(days=1)
+
+        findings: list[dict[str, Any]] = []
+        scanned = 0
+        for item in client.iter_items(
+            folder=folder,
+            since=since_dt,
+            until=until_dt,
+            batch_size=max(1, min(int(batch_size), 200)),
+            max_items=int(max_items),
+            fetch_body=True,
+        ):
+            scanned += 1
+            body = getattr(item, "text_body", None) or ""
+            sent = getattr(item, "datetime_sent", None)
+            for hit in scan_text(body):
+                findings.append(
+                    {
+                        "item_id": getattr(item, "id", ""),
+                        "subject": getattr(item, "subject", "") or "",
+                        "from": _mailbox_strings([getattr(item, "sender", None)]),
+                        "to": _mailbox_strings(getattr(item, "to_recipients", None)),
+                        "date": sent.isoformat() if sent else None,
+                        "type": hit["type"],
+                        "value": hit["value"],
+                        "context": hit["context"],
+                    }
+                )
+
+        if not self.settings.report_show_secrets:
+            for finding in findings:
+                finding["value"] = "***"
+                finding["context"] = redact(finding["context"], False)
+
+        report = None
+        if report_path:
+            target = safe_output_path(report_path, self.settings)
+            lines = [
+                "# Secret scan",
+                "",
+                f"- Folder: {folder}",
+                f"- Emails scanned: {scanned}",
+                f"- Findings: {len(findings)}",
+                "",
+            ]
+            for finding in findings:
+                lines.append(
+                    f"- `{finding['type']}` — {finding['date']} — {finding['subject']} "
+                    f"— to: {', '.join(finding['to'])}"
+                )
+                lines.append(f"  - value: `{finding['value']}`")
+                lines.append(f"  - context: {finding['context']}")
+                lines.append(f"  - item_id: {finding['item_id']}")
+            target.write_text("\n".join(lines), encoding="utf-8")
+            report = str(target)
+
+        return {
+            "scanned": scanned,
+            "findings_count": len(findings),
+            "findings": findings[:100],
+            "report": report,
+        }
+
     def read_email(
         self,
         item_id: str,
@@ -288,6 +371,7 @@ def build_tools(toolbox: ToolBox) -> list[Any]:
     specs = [
         (toolbox.resolve_recipient, "resolve_recipient"),
         (toolbox.search_emails, "search_emails"),
+        (toolbox.scan_emails_for_secrets, "scan_emails_for_secrets"),
         (toolbox.read_email, "read_email"),
         (toolbox.create_email, "create_email"),
         (toolbox.send_email, "send_email"),

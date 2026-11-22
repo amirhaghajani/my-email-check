@@ -23,6 +23,7 @@ from .tools import ToolBox
 _TOOL_METHODS = (
     "resolve_recipient",
     "search_emails",
+    "scan_emails_for_secrets",
     "read_email",
     "create_email",
     "send_email",

@@ -69,6 +69,27 @@ class FakeClient:
                 return item
         raise KeyError(item_id)
 
+    def iter_items(
+        self,
+        folder="sentitems",
+        since=None,
+        until=None,
+        subject_contains=None,
+        batch_size=50,
+        max_items=None,
+        fetch_body=True,
+    ):
+        limit = max_items if max_items is not None else len(self.items)
+        for item in self.search(
+            folder=folder,
+            since=since,
+            until=until,
+            subject_contains=subject_contains,
+            limit=limit,
+            fetch_body=fetch_body,
+        ):
+            yield item
+
     def resolve_names(self, name):
         return [FakeMailbox("Bala Bala", "bala@example.com")]
 

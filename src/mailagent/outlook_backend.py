@@ -199,6 +199,49 @@ class OutlookBackend:
                 break
         return results
 
+    def iter_items(
+        self,
+        folder: str = "sentitems",
+        since: datetime | None = None,
+        until: datetime | None = None,
+        subject_contains: str | None = None,
+        batch_size: int = 50,
+        max_items: int | None = None,
+        fetch_body: bool = True,
+    ):
+        items = self._folder(folder).Items
+        try:
+            items.Sort("[SentOn]", True)
+        except Exception:
+            pass
+
+        filters: list[str] = []
+        if since is not None:
+            filters.append(f"[SentOn] >= '{_outlook_date(since)}'")
+        if until is not None:
+            filters.append(f"[SentOn] <= '{_outlook_date(until)}'")
+        if subject_contains:
+            safe = subject_contains.replace("'", "''")
+            filters.append(f"[Subject] LIKE '%{safe}'")
+        if filters:
+            try:
+                items = items.Restrict(" AND ".join(filters))
+            except Exception:
+                pass
+
+        total = items.Count
+        if max_items is not None:
+            total = min(total, int(max_items))
+        step = max(1, int(batch_size))
+        for start in range(0, total, step):
+            end = min(start + step, total)
+            for index in range(start, end):
+                try:
+                    com = items.Item(index + 1)
+                    yield self._to_item(com, fetch_body)
+                except Exception:
+                    continue
+
     def _to_item(self, com: Any, fetch_body: bool) -> SimpleItem:
         sender = SimpleMailbox(
             getattr(com, "SenderName", "") or "",
