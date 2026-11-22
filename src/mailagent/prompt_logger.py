@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,11 +23,38 @@ def _role(message: Any) -> str:
     return str(value or "unknown")
 
 
+def _tool_calls(raw: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for call in raw or []:
+        if isinstance(call, dict):
+            out.append(call)
+            continue
+        fn = getattr(call, "function", None)
+        out.append(
+            {
+                "id": getattr(call, "id", ""),
+                "type": getattr(call, "type", "function"),
+                "function": {
+                    "name": getattr(fn, "name", ""),
+                    "arguments": getattr(fn, "arguments", ""),
+                },
+            }
+        )
+    return out
+
+
 def _message(message: Any) -> dict[str, Any]:
     content = getattr(message, "content", None)
     if content is None:
-        content = str(message)
-    return {"role": _role(message), "content": content}
+        content = ""
+    data: dict[str, Any] = {"role": _role(message), "content": content}
+
+    additional = getattr(message, "additional_kwargs", None) or {}
+    if additional.get("tool_calls"):
+        data["tool_calls"] = _tool_calls(additional["tool_calls"])
+    if additional.get("function_call"):
+        data["function_call"] = additional["function_call"]
+    return data
 
 
 def _response(response: Any) -> Any:
@@ -39,7 +67,7 @@ def _response(response: Any) -> Any:
 
 
 class PromptLogger(BaseCallbackHandler):
-    """Record every LLM call (messages + response) for inspection."""
+    """Record every LLM call (messages, response, tool calls, duration)."""
 
     def __init__(self, path: Path, keep: int = 200) -> None:
         super().__init__([], [])
@@ -47,6 +75,7 @@ class PromptLogger(BaseCallbackHandler):
         self.keep = keep
         self.entries: list[dict[str, Any]] = []
         self.latest: dict[str, Any] | None = None
+        self._starts: dict[str, float] = {}
         self._lock = threading.Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -58,6 +87,9 @@ class PromptLogger(BaseCallbackHandler):
         parent_id: str = "",
         **kwargs: Any,
     ) -> str:
+        if event_type == CBEventType.LLM and event_id:
+            with self._lock:
+                self._starts[event_id] = time.monotonic()
         return event_id
 
     def on_event_end(
@@ -72,11 +104,16 @@ class PromptLogger(BaseCallbackHandler):
         if payload.get("exception"):
             return
 
+        with self._lock:
+            started = self._starts.pop(event_id, None)
+        duration_ms = int((time.monotonic() - started) * 1000) if started else None
+
         messages = payload.get("messages")
         if messages is not None:
             entry: dict[str, Any] = {
                 "ts": _now(),
                 "kind": "chat",
+                "duration_ms": duration_ms,
                 "messages": [_message(m) for m in messages],
                 "response": _response(payload.get("response")),
             }
@@ -84,6 +121,7 @@ class PromptLogger(BaseCallbackHandler):
             entry = {
                 "ts": _now(),
                 "kind": "completion",
+                "duration_ms": duration_ms,
                 "prompt": payload.get("formatted_prompt") or payload.get("prompt"),
                 "response": payload.get("completion"),
             }
