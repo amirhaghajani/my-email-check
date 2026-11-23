@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +11,10 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .agent import build_agent
+from . import db
+from .agent import build_agent, run_with_fallback
 from .config import Settings, get_settings
+from .crawler import Crawler
 from .output import configure_console, console
 from .prompt_logger import PromptLogger
 from .tools import ToolBox
@@ -23,18 +26,14 @@ class ChatRequest(BaseModel):
     message: str
 
 
-def _as_text(result: object) -> str:
-    response = getattr(result, "response", None)
-    if response is not None:
-        content = getattr(response, "content", None)
-        if content is not None:
-            return content
-    content = getattr(result, "content", None)
-    if isinstance(content, str):
-        return content
-    if content is not None:
-        return str(content)
-    return str(result)
+class CrawlRequest(BaseModel):
+    until: str
+    folder: str = "all"
+
+
+class SearchRequest(BaseModel):
+    q: str
+    limit: int = 10
 
 
 def create_app(
@@ -71,6 +70,9 @@ def create_app(
     app.state.ctx = ctx
     app.state.memory = memory
 
+    crawler = Crawler(settings, toolbox.backend)
+    app.state.crawler = crawler
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_INDEX)
@@ -91,8 +93,9 @@ def create_app(
         started = time.perf_counter()
         async with run_lock:
             try:
-                result = await agent.run(req.message, ctx=ctx, memory=memory)
-                answer = _as_text(result)
+                answer = await run_with_fallback(
+                    agent, ctx, memory, req.message, toolbox.tool_map()
+                )
             except Exception as exc:
                 answer = f"[error] {exc}"
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -119,6 +122,55 @@ def create_app(
     def send_draft(draft_id: str) -> dict[str, Any]:
         return toolbox.send_draft_now(draft_id)
 
+    @app.post("/api/crawl")
+    def start_crawl(req: CrawlRequest) -> dict[str, Any]:
+        try:
+            date.fromisoformat(req.until)
+        except ValueError:
+            return {"started": False, "error": "until must be YYYY-MM-DD"}
+        if not settings.database_url:
+            return {"started": False, "error": "DATABASE_URL is not set"}
+        started = crawler.start(req.until, req.folder)
+        if not started:
+            return {"started": False, "error": "a crawl is already running"}
+        return {"started": True}
+
+    @app.get("/api/crawl/status")
+    def crawl_status() -> dict[str, Any]:
+        return crawler.status()
+
+    @app.post("/api/crawl/stop")
+    def stop_crawl() -> dict[str, bool]:
+        crawler.stop()
+        return {"stopping": True}
+
+    @app.post("/api/search")
+    def search(req: SearchRequest) -> dict[str, Any]:
+        if not settings.database_url:
+            return {"error": "DATABASE_URL is not set", "results": [], "mode": "none"}
+        try:
+            conn = db.connect(settings)
+        except Exception as exc:
+            return {"error": str(exc), "results": [], "mode": "none"}
+
+        try:
+            embedding = None
+            try:
+                vectors = crawler.embed_fn([req.q])
+                embedding = vectors[0] if vectors else None
+            except Exception:
+                embedding = None
+
+            rows = db.search(conn, req.q, embedding, max(1, min(req.limit, 50)))
+            return {
+                "results": rows,
+                "mode": "vector" if embedding is not None else "sql",
+            }
+        except Exception as exc:
+            return {"error": str(exc), "results": [], "mode": "error"}
+        finally:
+            conn.close()
+
     return app
 
 
@@ -143,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         console.print(f"[error] Invalid configuration: {exc}")
         return 2
+
+    if not settings.database_url:
+        console.print("[warning] DATABASE_URL is not set; crawling/search are disabled.")
 
     if settings.mail_backend.lower() == "ews":
         from .cli import prompt_credentials

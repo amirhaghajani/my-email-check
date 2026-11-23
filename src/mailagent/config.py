@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     exchange_access_type: str = Field(default="IMPERSONATION", pattern="^(IMPERSONATION|DELEGATE)$")
     mailbox_email: str = ""
 
+    # PostgreSQL (crawl storage + embeddings)
+    database_url: str = ""
+    embedding_model: str = "nomic-embed-text"
+
     # Behaviour
     output_dir: str = "reports"
     report_show_secrets: bool = False
@@ -75,6 +79,10 @@ class Settings(BaseSettings):
             )
         if not self.mailbox_email:
             raise ValueError("Missing required Exchange settings: MAILBOX_EMAIL")
+
+    def require_database(self) -> None:
+        if not self.database_url:
+            raise ValueError("DATABASE_URL is required for crawling")
 
 
 def get_settings() -> Settings:

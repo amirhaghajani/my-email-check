@@ -90,3 +90,22 @@ def test_web_chat_returns_elapsed(tmp_path):
     assert data["response"] == "fake response"
     assert data["elapsed_ms"] is not None
     assert data["elapsed_ms"] >= 0
+
+
+def test_web_crawl_status_idle(tmp_path):
+    client = TestClient(_app(tmp_path))
+    data = client.get("/api/crawl/status").json()
+    assert data["status"] == "idle"
+
+
+def test_web_crawl_without_database(tmp_path):
+    client = TestClient(_app(tmp_path))
+    data = client.post("/api/crawl", json={"until": "2025-01-01"}).json()
+    assert data["started"] is False
+    assert "DATABASE_URL" in data["error"]
+
+
+def test_web_search_without_database(tmp_path):
+    client = TestClient(_app(tmp_path))
+    data = client.post("/api/search", json={"q": "x"}).json()
+    assert data["mode"] == "none"

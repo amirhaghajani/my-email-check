@@ -4,6 +4,10 @@ from fakes import FakeClient, FakeItem, FakeMailbox, make_settings
 from mailagent.tools import ToolBox
 
 
+def _search(box, **kwargs):
+    return box.search_emails(**kwargs)["items"]
+
+
 def _items():
     return [
         FakeItem(
@@ -25,7 +29,7 @@ def _items():
 
 def test_search_by_recipient():
     box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
-    results = box.search_emails(to="bala")
+    results = _search(box,to="bala")
     assert len(results) == 1
     assert results[0]["item_id"] == "1"
     assert "hunter2" not in results[0]["preview"]
@@ -33,20 +37,20 @@ def test_search_by_recipient():
 
 def test_search_by_sender():
     box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
-    results = box.search_emails(from_="alice")
+    results = _search(box,from_="alice")
     assert len(results) == 1
     assert results[0]["item_id"] == "1"
 
 
 def test_search_by_body():
     box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
-    results = box.search_emails(body_contains="hunter")
+    results = _search(box,body_contains="hunter")
     assert len(results) == 1
 
 
 def test_search_by_subject():
     box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
-    results = box.search_emails(subject_contains="other")
+    results = _search(box,subject_contains="other")
     assert len(results) == 1
     assert results[0]["item_id"] == "2"
 
@@ -73,14 +77,14 @@ def test_resolve_recipient():
 
 def test_preview_opt_in_masks_secret():
     box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
-    results = box.search_emails(to="bala", preview=True)
+    results = _search(box,to="bala", preview=True)
     assert results[0]["preview"]
     assert "hunter2" not in results[0]["preview"]
 
 
 def test_preview_off_by_default():
     box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
-    results = box.search_emails(to="bala")
+    results = _search(box,to="bala")
     assert results[0]["preview"] == ""
 
 
@@ -93,7 +97,7 @@ def test_until_date_includes_whole_day():
         sent=datetime(2025, 6, 1, 18, 0, 0),
     )
     box = ToolBox(settings=make_settings(), backend=FakeClient([item]))
-    results = box.search_emails(until="2025-06-01")
+    results = _search(box,until="2025-06-01")
     assert len(results) == 1
 
 
@@ -105,5 +109,20 @@ def test_search_subject_masked():
         [FakeMailbox("B", "b@example.com")],
     )
     box = ToolBox(settings=make_settings(), backend=FakeClient([item]))
-    results = box.search_emails()
+    results = _search(box)
     assert "hunter2" not in results[0]["subject"]
+
+
+def test_search_empty_result_is_explicit():
+    box = ToolBox(settings=make_settings(), backend=FakeClient([]))
+    result = box.search_emails()
+    assert result["count"] == 0
+    assert result["items"] == []
+    assert "Do not invent" in result["note"]
+
+
+def test_search_coerces_string_arguments():
+    box = ToolBox(settings=make_settings(), backend=FakeClient(_items()))
+    result = box.search_emails(limit="10", preview="True")
+    assert result["count"] == 2
+    assert result["items"][0]["preview"]

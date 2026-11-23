@@ -32,9 +32,9 @@ main { flex:1; display:flex; min-height:0; }
 #composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid #262b36; background:var(--panel); }
 #input { flex:1; resize:none; min-height:48px; max-height:160px; background:#0b0d12; color:var(--text); border:1px solid #2a2f3a; border-radius:10px; padding:10px 12px; font-family:inherit; font-size:15px; }
 #composer button { background:var(--user); border-color:var(--user); min-width:90px; }
-aside { width:380px; border-inline-start:1px solid #262b36; background:var(--panel); display:flex; flex-direction:column; min-height:0; }
-.tabs { display:flex; border-bottom:1px solid #262b36; }
-.tabs button { flex:1; border:0; border-radius:0; background:transparent; padding:12px; }
+aside { width:400px; border-inline-start:1px solid #262b36; background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+.tabs { display:flex; border-bottom:1px solid #262b36; flex-wrap:wrap; }
+.tabs button { flex:1 1 25%; border:0; border-radius:0; background:transparent; padding:10px 6px; font-size:12px; }
 .tabs button.active { background:#0b0d12; color:#fff; }
 .panel { flex:1; overflow:auto; padding:12px; display:none; }
 .panel.active { display:block; }
@@ -43,9 +43,22 @@ aside { width:380px; border-inline-start:1px solid #262b36; background:var(--pan
 .draft .meta { color:var(--muted); font-size:12px; margin-bottom:6px; }
 .draft .body { white-space:pre-wrap; font-size:13px; margin-bottom:8px; }
 .draft button { background:#238636; border-color:#238636; }
+.field { margin-bottom:10px; }
+.field label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+.field input, .field select, #search-q { width:100%; background:#0b0d12; color:var(--text); border:1px solid #2a2f3a; border-radius:8px; padding:8px; font-family:inherit; font-size:13px; }
+.row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+.row > input { flex:1; }
+.row button { flex:0 0 auto; }
+#crawl-start { background:#238636; border-color:#238636; }
+#crawl-stop { background:#5a1f1f; border-color:#5a1f1f; }
+.crawl-status { margin-top:10px; color:var(--muted); font-size:12px; direction:ltr; text-align:left; white-space:pre-wrap; }
+.search-result { background:#0b0d12; border:1px solid #2a2f3a; border-radius:10px; padding:10px; margin-bottom:8px; }
+.search-result .meta { color:var(--muted); font-size:11px; }
+.search-result .subject { font-weight:600; margin:4px 0; }
+.search-result .snippet { font-size:13px; color:#cdd6e4; white-space:pre-wrap; }
 @media (max-width: 900px) {
   main { flex-direction:column; }
-  aside { width:auto; height:40vh; border-inline-start:0; border-top:1px solid #262b36; }
+  aside { width:auto; height:45vh; border-inline-start:0; border-top:1px solid #262b36; }
 }
 </style>
 </head>
@@ -68,9 +81,37 @@ aside { width:380px; border-inline-start:1px solid #262b36; background:var(--pan
     <div class="tabs">
       <button class="active" data-tab="prompt">Prompt LLM</button>
       <button data-tab="drafts">Drafts</button>
+      <button data-tab="crawl">Crawl</button>
+      <button data-tab="search">Search</button>
     </div>
     <div class="panel active" id="panel-prompt"><div id="prompt">—</div></div>
     <div class="panel" id="panel-drafts"><div id="drafts">—</div></div>
+    <div class="panel" id="panel-crawl">
+      <div class="field">
+        <label for="crawl-until">Crawl until date</label>
+        <input type="date" id="crawl-until">
+      </div>
+      <div class="field">
+        <label for="crawl-folder">Folder</label>
+        <select id="crawl-folder">
+          <option value="all">All (sent + inbox)</option>
+          <option value="sentitems">Sent Items</option>
+          <option value="inbox">Inbox</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="crawl-start">Start crawl</button>
+        <button id="crawl-stop">Stop</button>
+      </div>
+      <div class="crawl-status" id="crawl-status">idle</div>
+    </div>
+    <div class="panel" id="panel-search">
+      <div class="row">
+        <input type="text" id="search-q" dir="auto" placeholder="Search emails...">
+        <button id="search-btn">Search</button>
+      </div>
+      <div id="search-results">—</div>
+    </div>
   </aside>
 </main>
 <script>
@@ -213,11 +254,88 @@ async function reset() {
   addMsg('agent', 'گفتگوی جدید شروع شد.');
 }
 
+// --- crawl ---
+async function startCrawl() {
+  const until = document.getElementById('crawl-until').value;
+  const folder = document.getElementById('crawl-folder').value;
+  const el = document.getElementById('crawl-status');
+  if (!until) { el.textContent = 'Select a date first.'; return; }
+  const res = await fetch('/api/crawl', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({until, folder})
+  });
+  const data = await res.json();
+  if (!data.started) { el.textContent = 'Error: ' + (data.error || 'could not start'); return; }
+  refreshCrawlStatus();
+}
+
+async function stopCrawl() {
+  await fetch('/api/crawl/stop', {method: 'POST'});
+  refreshCrawlStatus();
+}
+
+async function refreshCrawlStatus() {
+  try {
+    const res = await fetch('/api/crawl/status');
+    const s = await res.json();
+    const el = document.getElementById('crawl-status');
+    if (s.running) {
+      el.textContent =
+        'running — ' + s.processed + ' emails — ' + s.folder +
+        ' — last: ' + (s.last_subject || '') + ' (' + (s.last_sent_at || '') + ')';
+      setTimeout(refreshCrawlStatus, 1000);
+    } else if (s.status === 'idle') {
+      el.textContent = 'idle';
+    } else {
+      el.textContent =
+        s.status + ' — ' + s.processed + ' emails' +
+        (s.error ? ' — error: ' + s.error : '');
+    }
+  } catch (e) {}
+}
+
+// --- search ---
+async function doSearch() {
+  const q = document.getElementById('search-q').value.trim();
+  if (!q) return;
+  const res = await fetch('/api/search', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({q, limit: 10})
+  });
+  const data = await res.json();
+  const el = document.getElementById('search-results');
+  el.innerHTML = '';
+  if (data.error) { el.textContent = 'Error: ' + data.error; return; }
+  if (!data.results || !data.results.length) { el.textContent = 'No results'; return; }
+  for (const r of data.results) {
+    const card = document.createElement('div');
+    card.className = 'search-result';
+    card.setAttribute('dir', 'auto');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = (r.sent_at || '') + ' — ' + (r.sender_name || '') + ' <' + (r.sender_email || '') + '>';
+    const subject = document.createElement('div');
+    subject.className = 'subject';
+    subject.textContent = r.subject || '';
+    const snippet = document.createElement('div');
+    snippet.className = 'snippet';
+    snippet.textContent = r.snippet || '';
+    card.append(meta, subject, snippet);
+    el.appendChild(card);
+  }
+}
+
 document.getElementById('composer').addEventListener('submit', (e) => { e.preventDefault(); send(); });
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 document.getElementById('reset').onclick = reset;
+document.getElementById('crawl-start').onclick = startCrawl;
+document.getElementById('crawl-stop').onclick = stopCrawl;
+document.getElementById('search-btn').onclick = doSearch;
+document.getElementById('search-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
 
 document.querySelectorAll('.tabs button').forEach(btn => {
   btn.onclick = () => {
@@ -225,6 +343,7 @@ document.querySelectorAll('.tabs button').forEach(btn => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'crawl') refreshCrawlStatus();
   };
 });
 
@@ -237,6 +356,7 @@ document.querySelectorAll('.tabs button').forEach(btn => {
   } catch (e) {}
   refreshPrompt();
   refreshDrafts();
+  refreshCrawlStatus();
   setInterval(refreshPrompt, 5000);
   setInterval(refreshDrafts, 5000);
 })();

@@ -21,6 +21,21 @@ from .secret_scan import scan_text
 ConfirmFn = Callable[[str], bool]
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(value)
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_dt(value: Any, default_tz: Any = None) -> datetime | None:
     if value is None or value == "":
         return None
@@ -118,6 +133,9 @@ class ToolBox:
     ) -> list[dict[str, Any]]:
         """Search the mailbox and return email summaries (id, subject, people, date).
 
+        Returns a dict: {"count": int, "items": [...], "note": str}. If count is 0,
+        say so plainly and do not invent emails.
+
         folder: "sentitems" (default), "inbox", or "all".
         Dates are ISO strings (e.g. "2025-01-01"). Recipient/sender/body text
         filters are applied client-side because EWS recipient search is unreliable.
@@ -131,13 +149,17 @@ class ToolBox:
             # date-only "until" means end of that day
             until_dt = until_dt + timedelta(days=1)
 
-        need_body = bool(preview) or bool(body_contains)
+        limit = _as_int(limit, 25)
+        preview = _as_bool(preview)
+        has_att = _as_bool(has_attachments) if has_attachments is not None else None
+
+        need_body = preview or bool(body_contains)
         items = client.search(
             folder=folder,
             since=since_dt,
             until=until_dt,
             subject_contains=subject_contains,
-            limit=max(1, min(int(limit or 25), 200)),
+            limit=max(1, min(limit, 200)),
             fetch_body=need_body,
         )
 
@@ -153,7 +175,7 @@ class ToolBox:
                 continue
             if not _contains(sender_str, from_):
                 continue
-            if has_attachments is not None and bool(getattr(item, "has_attachments", False)) != has_attachments:
+            if has_att is not None and bool(getattr(item, "has_attachments", False)) != has_att:
                 continue
 
             body = (getattr(item, "text_body", None) or "") if need_body else ""
@@ -176,7 +198,17 @@ class ToolBox:
                 }
             )
 
-        return results
+        if not results:
+            return {
+                "count": 0,
+                "items": [],
+                "note": "No emails matched the search. Do not invent emails or recipients.",
+            }
+        return {
+            "count": len(results),
+            "items": results,
+            "note": f"{len(results)} email(s) matched.",
+        }
 
     def scan_emails_for_secrets(
         self,
@@ -205,8 +237,8 @@ class ToolBox:
             folder=folder,
             since=since_dt,
             until=until_dt,
-            batch_size=max(1, min(int(batch_size), 200)),
-            max_items=int(max_items),
+            batch_size=max(1, min(_as_int(batch_size, 50), 200)),
+            max_items=_as_int(max_items, 1000),
             fetch_body=True,
         ):
             scanned += 1
@@ -269,9 +301,9 @@ class ToolBox:
         """Read one email by its item_id (from search_emails). Returns headers and body text."""
         item = self.backend.get_item(item_id)
         body = ""
-        if include_body:
+        if _as_bool(include_body):
             raw = getattr(item, "text_body", None) or ""
-            body = raw[: max(1, int(max_body_chars or 4000))]
+            body = raw[: max(1, _as_int(max_body_chars, 4000))]
         attachments = [getattr(a, "name", "") for a in (getattr(item, "attachments", None) or [])]
         sent = getattr(item, "datetime_sent", None)
         out = {
@@ -333,6 +365,18 @@ class ToolBox:
         self.drafts.pop(draft_id, None)
         return {"sent": True, "message_id": new_id}
 
+    def tool_map(self) -> dict[str, Callable[..., Any]]:
+        """Map tool names to callables (used by the text-tool-call fallback)."""
+        return {
+            "resolve_recipient": self.resolve_recipient,
+            "search_emails": self.search_emails,
+            "scan_emails_for_secrets": self.scan_emails_for_secrets,
+            "read_email": self.read_email,
+            "create_email": self.create_email,
+            "send_email": self.send_email,
+            "write_text_file": self.write_text_file,
+        }
+
     def draft_summaries(self) -> list[dict[str, Any]]:
         """List pending drafts (used by the web UI's confirmation panel)."""
         out: list[dict[str, Any]] = []
@@ -358,7 +402,7 @@ class ToolBox:
     def write_text_file(self, path: str, content: str, append: bool = False) -> dict[str, Any]:
         """Write UTF-8 text to a file under the reports directory (no path traversal)."""
         target = safe_output_path(path, self.settings)
-        mode = "a" if append else "w"
+        mode = "a" if _as_bool(append) else "w"
         with open(target, mode, encoding="utf-8") as fh:
             fh.write(content)
         return {"path": str(target), "bytes": len(content.encode("utf-8"))}

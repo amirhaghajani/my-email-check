@@ -132,6 +132,27 @@ The page has:
   click **Send**. This is the confirmation step.
 - Prompts are also appended to `reports/llm_prompts.jsonl`.
 
+## Crawl to PostgreSQL + semantic search
+
+The web UI's **Crawl** tab copies mail into a local PostgreSQL database with embeddings.
+
+1. Add to `.env`:
+   ```ini
+   DATABASE_URL=postgresql://user:pass@localhost:5432/mailagent
+   EMBEDDING_MODEL=nomic-embed-text   # or text-embedding-3-small, etc.
+   ```
+2. Make sure the embedding model exists on the LLM provider (e.g. `ollama pull nomic-embed-text`).
+   The `pgvector` extension is created automatically.
+3. In the web UI, open **Crawl**, pick a date and folder, and click **Start crawl**:
+   - Crawls newest → selected date, in batches of 50.
+   - Saves fields (subject, sender, recipients, date, body) + an embedding.
+   - **Resumable** — restarting continues from the last `sent_at`.
+   - **Stop** stops after the current item.
+4. Use the **Search** tab for semantic search (pgvector `<=>`), with a SQL `ILIKE` fallback if
+   embeddings are unavailable.
+
+Schema (auto-created): `emails`, `email_embeddings`, `crawl_runs`.
+
 ## Persian / Windows console
 
 - **Use Windows Terminal** — it applies the Unicode bidi algorithm, so Persian renders right-to-left.
@@ -236,4 +257,14 @@ path-traversal guard, UTF-8 report writing, the send confirmation gate, and back
 - **Agent forgets earlier messages** — the agent keeps a persistent `ChatMemoryBuffer` per
   session. Click **گفتگوی جدید / New chat** (or restart) to reset. The
   `UnserializableKeyWarning` about `memory` is expected and is suppressed.
+- **Agent invents emails or dates** — the system prompt now includes today's date and forbids
+  inventing data. Empty searches return `{"count": 0, "items": [], "note": "No emails matched..."}`.
+  If it still happens, use a stronger tool-calling model.
+- **Model outputs a tool call as JSON text** — some models (e.g. `llama3.1:8b`) don't use native
+  function calling reliably. The app parses text tool calls and executes **read-only** tools
+  (`search_emails`, `read_email`, `resolve_recipient`, `scan_emails_for_secrets`) for up to 2
+  retries, and coerces string args like `"10"` / `"True"`. State-changing tools (`send_email`,
+  `create_email`, `write_text_file`) are **never** executed this way; leftover raw JSON is replaced
+  with a friendly message. For best results, use a model with native tool calling (`qwen3:14b`,
+  `qwen2.5:14b`, `mistral-nemo`, `gpt-4o-mini`).
 - **Persian text looks wrong** — use Windows Terminal with a Persian-capable font and `PYTHONUTF8=1`.

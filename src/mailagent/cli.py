@@ -18,7 +18,7 @@ from llama_index.core.callbacks import CallbackManager
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.workflow import Context
 
-from .agent import build_agent, build_llm
+from .agent import build_agent, build_llm, run_with_fallback
 from .backend import build_backend
 from .config import Settings, get_settings
 from .output import configure_console, console, is_windows_terminal
@@ -28,23 +28,8 @@ from .tools import ToolBox
 BANNER = "Exchange Mail Agent - type a request, or 'exit' to quit."
 
 
-def _as_text(result: object) -> str:
-    response = getattr(result, "response", None)
-    if response is not None:
-        content = getattr(response, "content", None)
-        if content is not None:
-            return content
-    content = getattr(result, "content", None)
-    if isinstance(content, str):
-        return content
-    if content is not None:
-        return str(content)
-    return str(result)
-
-
-async def _ask(agent, ctx: Context, text: str, memory: ChatMemoryBuffer) -> str:
-    result = await agent.run(text, ctx=ctx, memory=memory)
-    return _as_text(result)
+async def _ask(agent, ctx: Context, text: str, memory: ChatMemoryBuffer, tool_map) -> str:
+    return await run_with_fallback(agent, ctx, memory, text, tool_map)
 
 
 def prompt_credentials() -> tuple[str, str]:
@@ -96,7 +81,7 @@ async def repl(
         if not stripped:
             continue
         try:
-            answer = await _ask(agent, ctx, text, memory)
+            answer = await _ask(agent, ctx, text, memory, toolbox.tool_map())
             console.print("\nagent> " + answer + "\n")
             if show_prompt:
                 _print_prompt(logger)
@@ -118,7 +103,7 @@ async def one_shot(
     agent = build_agent(settings, toolbox, callback_manager=CallbackManager([logger]))
     ctx = Context(agent)
     memory = ChatMemoryBuffer.from_defaults(llm=agent.llm)
-    console.print(await _ask(agent, ctx, text, memory))
+    console.print(await _ask(agent, ctx, text, memory, toolbox.tool_map()))
     if show_prompt:
         _print_prompt(logger)
     return 0
